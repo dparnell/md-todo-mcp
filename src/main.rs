@@ -126,7 +126,13 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let todo_file = std::env::var("TODO_FILE").unwrap_or_else(|_| "todo.md".to_string());
+    let args: Vec<String> = std::env::args().collect();
+    let todo_file = if args.len() > 1 {
+        args[1].clone()
+    } else {
+        std::env::var("TODO_FILE").unwrap_or_else(|_| "todo.md".to_string())
+    };
+
     let manager = MarkdownTodoManager::new(PathBuf::from(todo_file));
     let server = TodoServer {
         manager: std::sync::Arc::new(manager),

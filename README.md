@@ -39,13 +39,29 @@ The server uses standard input/output (stdio) for communication.
 # Using default todo.md
 ./target/release/md-todo-mcp
 
-# Using a custom file
+# Using a custom file (command line argument)
+./target/release/md-todo-mcp my_tasks.md
+
+# Using a custom file (environment variable)
 TODO_FILE="my_tasks.md" ./target/release/md-todo-mcp
 ```
 
 ### Integration with MCP Clients (e.g., Claude Desktop)
 
 To use this server with Claude Desktop, add the following to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "md-todo": {
+      "command": "path/to/your/md-todo-mcp",
+      "args": ["path/to/your/todo.md"]
+    }
+  }
+}
+```
+
+Alternatively, you can use the `env` field as before:
 
 ```json
 {
