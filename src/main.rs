@@ -6,6 +6,7 @@ use rmcp::{
     ServiceExt,
     tool,
     handler::{server::tool::Parameters, server::ServerHandler},
+    model::{ServerCapabilities, ServerInfo, ProtocolVersion, Implementation},
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -37,7 +38,7 @@ struct CommentArgs {
     comment: String,
 }
 
-#[tool]
+#[tool(tool_box)]
 impl TodoServer {
     /// Add a new TODO item
     async fn add_todo(&self, Parameters(args): Parameters<AddTodoArgs>) -> Result<String, String> {
@@ -117,7 +118,20 @@ impl TodoServer {
 }
 
 #[async_trait::async_trait]
-impl ServerHandler for TodoServer {}
+impl ServerHandler for TodoServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            protocol_version: ProtocolVersion::LATEST,
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            server_info: Implementation {
+                name: "md-todo-mcp".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                ..Default::default()
+            },
+            instructions: Some("A Markdown TODO manager MCP server".to_string()),
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
