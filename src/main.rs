@@ -4,14 +4,19 @@ use anyhow::Result;
 use rmcp::{
     transport::stdio,
     ServiceExt,
-    tool,
     handler::{server::tool::Parameters, server::ServerHandler},
-    model::{ServerCapabilities, ServerInfo, ProtocolVersion, Implementation},
+    model::{ServerCapabilities, ServerInfo, ProtocolVersion, Implementation, ListToolsResult, CallToolResult, Tool, PaginatedRequestParam, CallToolRequestParam, Content},
+    service::{RoleServer, RequestContext},
+    Error as McpError,
 };
+use std::sync::Arc;
+use serde_json::json;
+use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::path::PathBuf;
 use crate::todo_manager::{MarkdownTodoManager, TodoStatus};
+use std::borrow::Cow;
 
 #[derive(Clone)]
 struct TodoServer {
@@ -38,7 +43,6 @@ struct CommentArgs {
     comment: String,
 }
 
-#[tool(tool_box)]
 impl TodoServer {
     /// Add a new TODO item
     async fn add_todo(&self, Parameters(args): Parameters<AddTodoArgs>) -> Result<String, String> {
@@ -117,7 +121,7 @@ impl TodoServer {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ServerHandler for TodoServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -129,6 +133,186 @@ impl ServerHandler for TodoServer {
                 ..Default::default()
             },
             instructions: Some("A Markdown TODO manager MCP server".to_string()),
+        }
+    }
+
+    fn list_tools(
+        &self,
+        _request: PaginatedRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+        let tools = vec![
+            Tool {
+                name: "add_todo".into(),
+                description: Cow::Borrowed("Add a new TODO item"),
+                input_schema: Arc::new(json!({
+                    "type": "object",
+                    "properties": {
+                        "text": { "type": "string" }
+                    },
+                    "required": ["text"]
+                }).as_object().unwrap().clone()),
+            },
+            Tool {
+                name: "remove_todo".into(),
+                description: Cow::Borrowed("Remove a TODO item by index"),
+                input_schema: Arc::new(json!({
+                    "type": "object",
+                    "properties": {
+                        "index": { "type": "integer" }
+                    },
+                    "required": ["index"]
+                }).as_object().unwrap().clone()),
+            },
+            Tool {
+                name: "list_todos".into(),
+                description: Cow::Borrowed("List all TODO items"),
+                input_schema: Arc::new(json!({
+                    "type": "object",
+                    "properties": {}
+                }).as_object().unwrap().clone()),
+            },
+            Tool {
+                name: "mark_done".into(),
+                description: Cow::Borrowed("Mark a TODO item as done"),
+                input_schema: Arc::new(json!({
+                    "type": "object",
+                    "properties": {
+                        "index": { "type": "integer" }
+                    },
+                    "required": ["index"]
+                }).as_object().unwrap().clone()),
+            },
+            Tool {
+                name: "mark_in_progress".into(),
+                description: Cow::Borrowed("Mark a TODO item as in progress"),
+                input_schema: Arc::new(json!({
+                    "type": "object",
+                    "properties": {
+                        "index": { "type": "integer" }
+                    },
+                    "required": ["index"]
+                }).as_object().unwrap().clone()),
+            },
+            Tool {
+                name: "get_in_progress_index".into(),
+                description: Cow::Borrowed("Get the index of the currently in progress TODO item"),
+                input_schema: Arc::new(json!({
+                    "type": "object",
+                    "properties": {}
+                }).as_object().unwrap().clone()),
+            },
+            Tool {
+                name: "unmark_done".into(),
+                description: Cow::Borrowed("Unmark a TODO item (mark as not done)"),
+                input_schema: Arc::new(json!({
+                    "type": "object",
+                    "properties": {
+                        "index": { "type": "integer" }
+                    },
+                    "required": ["index"]
+                }).as_object().unwrap().clone()),
+            },
+            Tool {
+                name: "find_next".into(),
+                description: Cow::Borrowed("Find the next incomplete TODO item"),
+                input_schema: Arc::new(json!({
+                    "type": "object",
+                    "properties": {}
+                }).as_object().unwrap().clone()),
+            },
+            Tool {
+                name: "add_comment".into(),
+                description: Cow::Borrowed("Add a comment to a TODO item"),
+                input_schema: Arc::new(json!({
+                    "type": "object",
+                    "properties": {
+                        "index": { "type": "integer" },
+                        "comment": { "type": "string" }
+                    },
+                    "required": ["index", "comment"]
+                }).as_object().unwrap().clone()),
+            },
+        ];
+        std::future::ready(Ok(ListToolsResult {
+            tools,
+            next_cursor: None,
+        }))
+    }
+
+    fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+        let this = self.clone();
+        async move {
+            match request.name.as_ref() {
+                "add_todo" => {
+                    let args_obj = request.arguments.ok_or_else(|| McpError::invalid_params("Missing arguments", None))?;
+                    let args: AddTodoArgs = serde_json::from_value(serde_json::Value::Object(args_obj))
+                        .map_err(|e| McpError::invalid_params(format!("Invalid params: {}", e), None))?;
+                    let res = this.add_todo(Parameters(args)).await
+                        .map_err(|e| McpError::internal_error(e, None))?;
+                    Ok(CallToolResult::success(vec![Content::text(res)]))
+                }
+                "remove_todo" => {
+                    let args_obj = request.arguments.ok_or_else(|| McpError::invalid_params("Missing arguments", None))?;
+                    let args: IndexArgs = serde_json::from_value(serde_json::Value::Object(args_obj))
+                        .map_err(|e| McpError::invalid_params(format!("Invalid params: {}", e), None))?;
+                    let res = this.remove_todo(Parameters(args)).await
+                        .map_err(|e| McpError::internal_error(e, None))?;
+                    Ok(CallToolResult::success(vec![Content::text(res)]))
+                }
+                "list_todos" => {
+                    let res = this.list_todos().await
+                        .map_err(|e| McpError::internal_error(e, None))?;
+                    Ok(CallToolResult::success(vec![Content::text(res)]))
+                }
+                "mark_done" => {
+                    let args_obj = request.arguments.ok_or_else(|| McpError::invalid_params("Missing arguments", None))?;
+                    let args: IndexArgs = serde_json::from_value(serde_json::Value::Object(args_obj))
+                        .map_err(|e| McpError::invalid_params(format!("Invalid params: {}", e), None))?;
+                    let res = this.mark_done(Parameters(args)).await
+                        .map_err(|e| McpError::internal_error(e, None))?;
+                    Ok(CallToolResult::success(vec![Content::text(res)]))
+                }
+                "mark_in_progress" => {
+                    let args_obj = request.arguments.ok_or_else(|| McpError::invalid_params("Missing arguments", None))?;
+                    let args: IndexArgs = serde_json::from_value(serde_json::Value::Object(args_obj))
+                        .map_err(|e| McpError::invalid_params(format!("Invalid params: {}", e), None))?;
+                    let res = this.mark_in_progress(Parameters(args)).await
+                        .map_err(|e| McpError::internal_error(e, None))?;
+                    Ok(CallToolResult::success(vec![Content::text(res)]))
+                }
+                "get_in_progress_index" => {
+                    let res = this.get_in_progress_index().await
+                        .map_err(|e| McpError::internal_error(e, None))?;
+                    Ok(CallToolResult::success(vec![Content::text(res)]))
+                }
+                "unmark_done" => {
+                    let args_obj = request.arguments.ok_or_else(|| McpError::invalid_params("Missing arguments", None))?;
+                    let args: IndexArgs = serde_json::from_value(serde_json::Value::Object(args_obj))
+                        .map_err(|e| McpError::invalid_params(format!("Invalid params: {}", e), None))?;
+                    let res = this.unmark_done(Parameters(args)).await
+                        .map_err(|e| McpError::internal_error(e, None))?;
+                    Ok(CallToolResult::success(vec![Content::text(res)]))
+                }
+                "find_next" => {
+                    let res = this.find_next().await
+                        .map_err(|e| McpError::internal_error(e, None))?;
+                    Ok(CallToolResult::success(vec![Content::text(res)]))
+                }
+                "add_comment" => {
+                    let args_obj = request.arguments.ok_or_else(|| McpError::invalid_params("Missing arguments", None))?;
+                    let args: CommentArgs = serde_json::from_value(serde_json::Value::Object(args_obj))
+                        .map_err(|e| McpError::invalid_params(format!("Invalid params: {}", e), None))?;
+                    let res = this.add_comment(Parameters(args)).await
+                        .map_err(|e| McpError::internal_error(e, None))?;
+                    Ok(CallToolResult::success(vec![Content::text(res)]))
+                }
+                _ => Err(McpError::method_not_found::<rmcp::model::CallToolRequestMethod>()),
+            }
         }
     }
 }
